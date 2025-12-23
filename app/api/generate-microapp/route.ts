@@ -1,5 +1,5 @@
 // /app/api/generate-microapp/route.ts
-// Microapp Builder Wizard - API Endpoint
+// Microapp Builder Wizard - API Endpoint v2
 // This handles form submissions and generates CVUF files using Claude
 
 import Anthropic from "@anthropic-ai/sdk";
@@ -9,6 +9,68 @@ import { NextRequest, NextResponse } from "next/server";
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
+
+// ============================================================================
+// FIELD MAPPING - CVUF integrationIDs to Internal API fields
+// ============================================================================
+// The CVUF form uses specific integrationID names. This function normalizes
+// them to the internal field names used by the rest of the API.
+
+function normalizeInputs(body: Record<string, any>): Record<string, any> {
+  return {
+    // Core info - direct mappings
+    microappName: body.microappName,
+    microappDescription: body.problemDescription,  // CVUF: problemDescription
+    userType: body.userType,
+    owningDepartment: body.owningDepartment,
+    triggerEvent: body.triggerEvent,
+    currentProcess: body.currentProcess,
+    
+    // Data collection - some renamed
+    needsContactInfo: body.fieldsList,  // CVUF: fieldsList (array of contact fields)
+    needsIdentifiers: body.needsIdentifiers,
+    needsDates: body.hasDateFields,  // CVUF: hasDateFields
+    needsChoices: body.needsChoices,
+    needsRichInput: body.hasFileUploads,  // CVUF: hasFileUploads
+    needsFinancial: body.needsFinancial,
+    hasSignature: body.hasSignature,
+    customDropdowns: body.dropdownOptions,  // CVUF: dropdownOptions
+    otherFields: body.otherFields,
+    
+    // Workflow
+    hasBranching: body.hasBranching,
+    branchingLogic: body.branchingLogic,
+    needsApproval: body.needsApproval,
+    approvalDetails: body.approvalDetails,
+    canSaveProgress: body.saveAndReturn,  // CVUF: saveAndReturn
+    
+    // Post-submit actions
+    submitActions: body.submitActions,
+    emailRecipients: body.notificationRecipients,  // CVUF: notificationRecipients
+    slackChannel: body.slackChannel,
+    crmSystem: body.crmType,  // CVUF: crmType
+    ticketSystem: body.ticketSystem,
+    otherIntegrations: body.otherIntegrations,
+    
+    // Data lookup
+    needsDataLookup: body.hasExternalLookup,  // CVUF: hasExternalLookup
+    lookupDetails: body.lookupDetails,
+    hasPrepopulation: body.hasPrepopulation,
+    prepopulationDetails: body.prepopulationDetails,
+    
+    // Requirements
+    needsMultiLanguage: body.multiLanguage,  // CVUF: multiLanguage
+    languages: body.languages,
+    complianceRequirements: body.complianceRequirements,
+    brandingNotes: body.brandingNotes,
+    estimatedVolume: body.estimatedVolume,
+    additionalNotes: body.additionalNotes,
+    
+    // Contact info
+    userName: body.userName,
+    userEmail: body.userEmail,
+  };
+}
 
 // ============================================================================
 // REFERENCE ARCHITECTURE - Embedded in System Prompt
@@ -71,6 +133,11 @@ Last step: hideFooter=true, no targetStep
 {"type":"emailInput","name":"editor.fields.emailinput","identifier":"email_xxx_001","integrationID":"fieldName","label":"Label","width":"half","icon":"fa-envelope","columnID":0}
 \`\`\`
 
+### phoneInput
+\`\`\`json
+{"type":"phoneInput","name":"editor.fields.phoneinput","identifier":"phone_xxx_001","integrationID":"fieldName","label":"Label","width":"half","columnID":0}
+\`\`\`
+
 ### dropdownInput (MUST have items array)
 \`\`\`json
 {"type":"dropdownInput","name":"editor.fields.dropdowninput","identifier":"dropdown_xxx_001","integrationID":"fieldName","label":"Label","width":"full","items":[{"label":"Option 1","value":"option1"},{"label":"Option 2","value":"option2"}],"columnID":0}
@@ -89,6 +156,11 @@ Last step: hideFooter=true, no targetStep
 ### dateInput
 \`\`\`json
 {"type":"dateInput","name":"editor.fields.dateinput","identifier":"date_xxx_001","integrationID":"fieldName","label":"Label","width":"half","columnID":0}
+\`\`\`
+
+### numberInput
+\`\`\`json
+{"type":"numberInput","name":"editor.fields.numberinput","identifier":"number_xxx_001","integrationID":"fieldName","label":"Label","width":"half","columnID":0}
 \`\`\`
 
 ### fileUpload
@@ -116,16 +188,56 @@ Last step: hideFooter=true, no targetStep
 {"theme":{"primary":"#0891B2","secondary":"#E0F2FE","title":"#0F172A","text":"#334155","background":"#ffffff","blockBackground":"#ffffff","headerText":"#0F172A","headerBackground":"#ffffff","font":"Inter-Regular","warning":"#F59E0B","altBackground":"#F8FAFC","danger":"#EF4444","link":"#0891B2","success":"#10B981","dark":"#1E293B","bright":"#FEF3C7","neutral":"#E2E8F0"}}
 \`\`\`
 
-## Conditional Rules
+## Block-Level Conditional Visibility (CORRECT METHOD)
+To conditionally show/hide content, use BLOCK-level visibility, not field-level:
+
+1. Set isHiddenInRuntime: true on the BLOCK (not individual fields)
+2. Use newRules with resultBlocks to show the block
+
 \`\`\`json
-{"newRules":[{"ruleName":"Show field when X","ruleType":"visibility","triggerField":"triggerIntegrationID","targetField":"targetIntegrationID","condition":"equals","conditionValue":"yes","action":"show"}]}
+{
+  "newRules": [{
+    "id": "rule_xxx",
+    "ruleName": "show_details_block",
+    "type": "visibility",
+    "condition": {
+      "expression": "equalText(<<triggerField>>, 'yes')",
+      "isRegex": false
+    },
+    "action": [{
+      "id": "action_xxx",
+      "visible": true,
+      "resultBlocks": ["block_details_001"],
+      "resultFields": [],
+      "navigateTo": {"type": "Step", "id": ""}
+    }]
+  }]
+}
 \`\`\`
-Conditions: equals, notEquals, contains, notEmpty, isEmpty
-Target field must have isHiddenInRuntime:true
+
+Available condition functions:
+- equalText(<<field>>, 'value')
+- contains(<<field>>, 'value') - for checkbox/multi-select
+- isEmpty(<<field>>)
+- isNotEmpty(<<field>>)
 
 ## Block Structure
 \`\`\`json
-{"blockName":"Section Title","identifier":"block_xxx_001","icon":"","rows":[{"fields":[...]}],"type":"regular","style":{"alignment":"center","nobackground":false,"noborders":false,"size":"full","background":"#ffffff"}}
+{
+  "blockName": "Section Title",
+  "identifier": "block_xxx_001",
+  "icon": "",
+  "isHiddenInRuntime": false,
+  "rows": [{"fields": [...]}],
+  "type": "regular",
+  "style": {
+    "alignment": "center",
+    "nobackground": false,
+    "noborders": false,
+    "size": "full",
+    "background": "#ffffff"
+  }
+}
 \`\`\`
 
 ## Universal Field Properties
@@ -133,13 +245,14 @@ All fields need: identifier, integrationID, type, name, width, columnID
 Optional: required, readOnly, isHiddenInRuntime, hint, tooltip, validations
 
 ## CRITICAL RULES
-1. All identifiers must be unique
+1. All identifiers must be unique across the entire form
 2. All targetStep values must reference existing step identifiers
 3. dropdownInput/radioInput/checkboxInput MUST have non-empty items array
-4. First step: isFirstNode=true, back hidden
+4. First step: isFirstNode=true, back button hidden
 5. Last step: hideFooter=true
-6. Output minified JSON (no pretty printing)
-7. Never set required=true on hidden fields
+6. Output minified JSON (no pretty printing, no markdown)
+7. Never set required=true on fields inside hidden blocks
+8. Use block-level visibility, NOT field-level isHiddenInRuntime
 `;
 
 // ============================================================================
@@ -166,14 +279,12 @@ function matchTemplate(description: string, department: string): { templateId: s
   for (const template of TEMPLATE_INDEX) {
     let score = 0;
     
-    // Keyword matching
     for (const keyword of template.keywords) {
       if (descLower.includes(keyword)) {
         score += 20;
       }
     }
     
-    // Department bonus
     if (template.department.toLowerCase() === department.toLowerCase()) {
       score += 30;
     }
@@ -199,7 +310,6 @@ interface ValidationWarning {
 function validateInputs(inputs: Record<string, any>): ValidationWarning[] {
   const warnings: ValidationWarning[] = [];
 
-  // Check for logical inconsistencies
   if (inputs.needsDataLookup === "yes" && !inputs.lookupDetails) {
     warnings.push({
       field: "lookupDetails",
@@ -248,7 +358,6 @@ function validateInputs(inputs: Record<string, any>): ValidationWarning[] {
     });
   }
 
-  // Volume and complexity check
   if (inputs.estimatedVolume === "10000+" && inputs.submitActions?.includes("notification")) {
     warnings.push({
       field: "estimatedVolume",
@@ -303,7 +412,7 @@ async function sendSlackNotification(data: {
         type: "header",
         text: {
           type: "plain_text",
-          text: "🆕 New Microapp Request",
+          text: "🆕 New Microapp Generated",
           emoji: true
         }
       },
@@ -414,7 +523,9 @@ export async function POST(request: NextRequest) {
   const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
   
   try {
-    const inputs = await request.json();
+    // Get raw body and normalize field names
+    const body = await request.json();
+    const inputs = normalizeInputs(body);
     
     // Validate inputs
     const warnings = validateInputs(inputs);
@@ -446,39 +557,39 @@ CRITICAL INSTRUCTIONS:
 1. Output ONLY valid minified JSON - no markdown, no explanation, no code blocks
 2. The JSON must start with {"form": and end with }}
 3. Every identifier must be unique
-4. Every dropdown/radio/checkbox MUST have a non-empty items array
+4. Every dropdown/radio/checkbox MUST have a non-empty items array with at least 2 options
 5. Follow the exact field structures from the reference
-6. Include complete theme object
-7. First step: isFirstNode=true, back button hidden
-8. Last step: hideFooter=true
-
-Generate a complete, production-ready CVUF file.`
+6. Use block-level visibility with newRules and resultBlocks for conditional content
+7. Create professional, user-friendly forms with clear labels and helpful hints`
     });
 
-    // Extract the generated CVUF
-    const responseText = message.content[0].type === "text" ? message.content[0].text : "";
+    const generatedContent = message.content[0].type === "text" ? message.content[0].text : "";
     
+    // Clean up the response (remove any markdown if present)
+    let cvufJson = generatedContent.trim();
+    if (cvufJson.startsWith("```")) {
+      cvufJson = cvufJson.replace(/```json\n?/g, "").replace(/```\n?/g, "");
+    }
+
     // Validate JSON
-    let cvufJson;
+    let parsedCvuf;
     try {
-      cvufJson = JSON.parse(responseText);
+      parsedCvuf = JSON.parse(cvufJson);
     } catch (parseError) {
-      // Try to extract JSON if wrapped in anything
-      const jsonMatch = responseText.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        cvufJson = JSON.parse(jsonMatch[0]);
-      } else {
-        throw new Error("Failed to parse generated CVUF");
-      }
+      throw new Error(`Generated invalid JSON: ${parseError}`);
+    }
+
+    // Verify it has the required structure
+    if (!parsedCvuf.form) {
+      throw new Error("Generated CVUF missing 'form' root property");
     }
 
     const generationTimeMs = Date.now() - startTime;
 
-    // Generate additional outputs
+    // Generate supporting materials
     const dependencies = generateDependencies(inputs);
-    const setupGuide = generateSetupGuide(inputs, cvufJson);
+    const setupGuide = generateSetupGuide(inputs, parsedCvuf);
     const pitchPoints = generatePitchPoints(inputs);
-    const buildTime = estimateBuildTime(inputs);
 
     // Log to Google Sheets
     await logToGoogleSheets({
@@ -507,15 +618,15 @@ Generate a complete, production-ready CVUF file.`
       warnings
     });
 
-    // Return response matching CallVu field integrationIDs
+    // Return success response with all outputs
     return NextResponse.json({
-      generatedCVUF: JSON.stringify(cvufJson),
+      success: true,
+      requestId,
+      generatedCVUF: cvufJson,
       generatedDependencies: dependencies,
       generatedSetupGuide: setupGuide,
       generatedPitchPoints: pitchPoints,
-      generatedBuildTime: buildTime,
-      _meta: {
-        requestId,
+      metadata: {
         generationTimeMs,
         templateMatch,
         warnings
@@ -548,6 +659,14 @@ Generate a complete, production-ready CVUF file.`
 // ============================================================================
 
 function buildGenerationPrompt(inputs: Record<string, any>, templateMatch: { templateId: string | null; score: number }): string {
+  // Format array fields for display
+  const formatArray = (arr: any[], separator = ", ") => {
+    if (Array.isArray(arr) && arr.length > 0) {
+      return arr.join(separator);
+    }
+    return "None specified";
+  };
+
   return `Generate a CallVu CVUF microapp file based on these requirements:
 
 ## Microapp Details
@@ -555,84 +674,113 @@ function buildGenerationPrompt(inputs: Record<string, any>, templateMatch: { tem
 - Description: ${inputs.microappDescription}
 - User Type: ${inputs.userType}
 - Department: ${inputs.owningDepartment}
-- Trigger: ${inputs.triggerEvent}
+- Trigger Event: ${inputs.triggerEvent}
 - Current Process: ${inputs.currentProcess}
 
 ## Data Collection Requirements
-- Contact Info: ${inputs.needsContactInfo ? "Yes" : "No"}
-- Identifiers/Account Numbers: ${inputs.needsIdentifiers ? "Yes" : "No"}
-- Dates/Scheduling: ${inputs.needsDates ? "Yes" : "No"}
-- Selection Choices: ${inputs.needsChoices ? "Yes" : "No"}
-- Rich Inputs (files/signatures): ${inputs.needsRichInput ? "Yes" : "No"}
-- Financial Data: ${inputs.needsFinancial ? "Yes" : "No"}
-- Custom Dropdowns: ${inputs.customDropdowns || "None"}
-- Other Fields: ${inputs.otherFields || "None"}
+- Contact Info Fields: ${formatArray(inputs.needsContactInfo)}
+- Identifiers/Account Numbers: ${formatArray(inputs.needsIdentifiers)}
+- Date/Time Fields: ${formatArray(inputs.needsDates)}
+- Selection/Choice Fields: ${formatArray(inputs.needsChoices)}
+- Rich Inputs: ${formatArray(inputs.needsRichInput)}
+- Financial Data: ${formatArray(inputs.needsFinancial)}
+- Digital Signature Required: ${inputs.hasSignature || "no"}
+- Custom Dropdown Descriptions: ${inputs.customDropdowns || "None"}
+- Other Field Requirements: ${inputs.otherFields || "None"}
 
-## Workflow
-- Conditional Branching: ${inputs.hasBranching} ${inputs.branchingLogic ? `- ${inputs.branchingLogic}` : ""}
-- Approval Required: ${inputs.needsApproval} ${inputs.approvalDetails ? `- ${inputs.approvalDetails}` : ""}
-- Save Progress: ${inputs.canSaveProgress}
+## Workflow Requirements
+- Conditional Branching: ${inputs.hasBranching}${inputs.branchingLogic ? ` - ${inputs.branchingLogic}` : ""}
+- Approval Required: ${inputs.needsApproval}${inputs.approvalDetails ? ` - ${inputs.approvalDetails}` : ""}
+- Save & Return Later: ${inputs.canSaveProgress}
 
 ## Post-Submit Actions
-- Actions: ${inputs.submitActions?.join(", ") || "Store only"}
+- Selected Actions: ${formatArray(inputs.submitActions)}
 - Email Recipients: ${inputs.emailRecipients || "Not specified"}
-- Slack Channel: ${inputs.slackChannel || "Not specified"}
+- Slack/Teams Channel: ${inputs.slackChannel || "Not specified"}
 - CRM System: ${inputs.crmSystem || "Not specified"}
-- Ticket System: ${inputs.ticketSystem || "Not specified"}
+- Ticketing System: ${inputs.ticketSystem || "Not specified"}
 - Other Integrations: ${inputs.otherIntegrations || "None"}
 
-## Data Lookup
-- Needs Lookup: ${inputs.needsDataLookup}
-- Details: ${inputs.lookupDetails || "Not specified"}
+## Data Lookup Requirements
+- Needs External Data Lookup: ${inputs.needsDataLookup}
+- Lookup Details: ${inputs.lookupDetails || "Not specified"}
+- Pre-populate Fields: ${inputs.hasPrepopulation || "no"}
+- Pre-population Details: ${inputs.prepopulationDetails || "Not specified"}
 
-## Requirements
-- Multi-language: ${inputs.needsMultiLanguage} ${inputs.languages?.join(", ") || ""}
-- Compliance: ${inputs.complianceRequirements?.join(", ") || "None"}
-- Branding: ${inputs.brandingNotes || "Use default CallVu theme"}
-- Volume: ${inputs.estimatedVolume}
+## Additional Requirements
+- Multi-language Support: ${inputs.needsMultiLanguage}${inputs.languages ? ` - ${formatArray(inputs.languages)}` : ""}
+- Compliance Requirements: ${formatArray(inputs.complianceRequirements)}
+- Branding Notes: ${inputs.brandingNotes || "Use default CallVu theme"}
+- Expected Monthly Volume: ${inputs.estimatedVolume}
 - Additional Notes: ${inputs.additionalNotes || "None"}
 
-${templateMatch.score >= 70 ? `\nSuggested base template: ${templateMatch.templateId} (${templateMatch.score}% match)` : ""}
+${templateMatch.score >= 70 ? `\nSuggested base template style: ${templateMatch.templateId} (${templateMatch.score}% keyword match)` : ""}
 
-Generate a complete CVUF JSON file with:
-1. Welcome/intro screen
-2. All necessary data collection screens (group logically)
-3. Review/confirmation screen if complex
-4. Thank you/completion screen
-5. Appropriate conditional logic rules
-6. All required integrationIDs for API mapping
+Generate a complete, production-ready CVUF JSON file with:
+1. Welcome/intro screen with clear purpose statement
+2. Logically grouped data collection screens (don't cram too many fields on one screen)
+3. Confirmation/thank you screen
+4. All necessary conditional visibility rules using block-level visibility
+5. Professional styling with the default CallVu theme
+6. Clear, helpful labels and hints on all fields
+7. Proper validation on required fields
 
-Output ONLY the minified JSON, nothing else.`;
+Output ONLY the minified JSON, nothing else. No markdown, no explanation.`;
 }
 
 function generateDependencies(inputs: Record<string, any>): string {
   const deps: string[] = [];
   
-  deps.push("✅ CallVu Studio account with import permissions");
+  deps.push("## Required Setup\n");
+  deps.push("✅ CallVu Studio account with form import permissions");
   
   if (inputs.submitActions?.includes("notification")) {
-    deps.push("📧 Email service configuration (SMTP or SendGrid)");
+    deps.push("📧 Email service configuration (SMTP server or SendGrid/Mailgun API)");
+    deps.push(`   └─ Recipients: ${inputs.emailRecipients || "[configure in CallVu]"}`);
   }
+  
   if (inputs.submitActions?.includes("slack")) {
-    deps.push("💬 Slack webhook URL for notifications");
+    deps.push("💬 Slack/Teams webhook URL");
+    deps.push(`   └─ Channel: ${inputs.slackChannel || "[configure webhook]"}`);
   }
+  
   if (inputs.submitActions?.includes("crm")) {
-    deps.push(`🔗 ${inputs.crmSystem || "CRM"} API credentials and field mapping`);
+    deps.push(`🔗 ${inputs.crmSystem || "CRM"} API integration`);
+    deps.push("   └─ API credentials and field mapping configuration");
   }
+  
   if (inputs.submitActions?.includes("ticket")) {
-    deps.push(`🎫 ${inputs.ticketSystem || "Ticketing system"} API integration`);
+    deps.push(`🎫 ${inputs.ticketSystem || "Ticketing system"} integration`);
+    deps.push("   └─ API credentials and ticket field mapping");
   }
+  
+  if (inputs.submitActions?.includes("spreadsheet")) {
+    deps.push("📊 Google Sheets integration");
+    deps.push("   └─ Sheet URL and column mapping");
+  }
+  
   if (inputs.needsDataLookup === "yes") {
-    deps.push("🔍 Data lookup API endpoint configuration");
+    deps.push("🔍 External data lookup API endpoint");
+    deps.push(`   └─ ${inputs.lookupDetails || "Configure lookup service"}`);
   }
+  
   if (inputs.needsMultiLanguage === "yes") {
     deps.push(`🌐 Translation files for: ${inputs.languages?.join(", ") || "selected languages"}`);
   }
-  if (inputs.complianceRequirements?.length > 0) {
-    deps.push(`📋 Compliance review for: ${inputs.complianceRequirements.join(", ")}`);
+  
+  if (inputs.complianceRequirements?.length > 0 && !inputs.complianceRequirements.includes("None")) {
+    deps.push(`\n## Compliance Checklist`);
+    for (const req of inputs.complianceRequirements) {
+      if (req !== "None") {
+        deps.push(`📋 ${req} compliance review required`);
+      }
+    }
   }
+  
   if (inputs.needsApproval === "yes") {
-    deps.push("👥 Approval workflow configuration in CallVu");
+    deps.push("\n## Workflow Setup");
+    deps.push("👥 Configure approval workflow in CallVu");
+    deps.push(`   └─ ${inputs.approvalDetails || "Define approvers and routing"}`);
   }
 
   return deps.join("\n");
@@ -641,46 +789,84 @@ function generateDependencies(inputs: Record<string, any>): string {
 function generateSetupGuide(inputs: Record<string, any>, cvuf: any): string {
   const steps: string[] = [];
   
-  steps.push("## Setup Guide\n");
-  steps.push("### Step 1: Import CVUF");
-  steps.push("1. Open CallVu Studio");
-  steps.push("2. Click 'Create New Form' → 'Import'");
-  steps.push("3. Paste the generated JSON");
-  steps.push("4. Verify all screens imported correctly\n");
-
-  steps.push("### Step 2: Configure Integrations");
+  steps.push("# Setup Guide\n");
   
-  if (inputs.submitActions?.includes("notification")) {
-    steps.push("\n**Email Notifications:**");
-    steps.push("- Go to Settings → Integrations → Email");
-    steps.push("- Configure SMTP or select email provider");
-    steps.push(`- Set recipients: ${inputs.emailRecipients || "[configure recipients]"}`);
-  }
+  steps.push("## Step 1: Import the CVUF File");
+  steps.push("1. Open CallVu Studio");
+  steps.push("2. Click 'Create New Form' → 'Import from JSON'");
+  steps.push("3. Paste the generated CVUF JSON");
+  steps.push("4. Click 'Import' and verify all screens loaded correctly");
+  steps.push("5. Review each screen in the visual editor\n");
 
-  if (inputs.submitActions?.includes("crm")) {
-    steps.push(`\n**${inputs.crmSystem || "CRM"} Integration:**`);
-    steps.push("- Go to Settings → Integrations → CRM");
-    steps.push("- Add API credentials");
-    steps.push("- Map form fields to CRM fields");
+  steps.push("## Step 2: Review & Customize");
+  steps.push("1. Check all field labels and hints for your brand voice");
+  steps.push("2. Adjust any dropdown options to match your terminology");
+  steps.push("3. Update the logo URL to your company logo");
+  steps.push("4. Modify theme colors if needed (Settings → Theme)\n");
+
+  if (inputs.submitActions?.length > 0) {
+    steps.push("## Step 3: Configure Integrations");
+    
+    if (inputs.submitActions.includes("notification")) {
+      steps.push("\n### Email Notifications");
+      steps.push("1. Go to Settings → Integrations → Email");
+      steps.push("2. Configure your SMTP server or email API");
+      steps.push(`3. Set up email template with recipient: ${inputs.emailRecipients || "[your recipient]"}`);
+      steps.push("4. Map form fields to email template variables");
+    }
+
+    if (inputs.submitActions.includes("crm")) {
+      steps.push(`\n### ${inputs.crmSystem || "CRM"} Integration`);
+      steps.push("1. Go to Settings → Integrations → CRM");
+      steps.push("2. Select your CRM provider and authenticate");
+      steps.push("3. Map form fields to CRM object fields");
+      steps.push("4. Configure record creation/update behavior");
+    }
+
+    if (inputs.submitActions.includes("slack")) {
+      steps.push("\n### Slack/Teams Notifications");
+      steps.push("1. Create a webhook in your Slack/Teams workspace");
+      steps.push("2. Go to Settings → Integrations → Webhooks");
+      steps.push("3. Add the webhook URL");
+      steps.push(`4. Configure message format for #${inputs.slackChannel || "channel"}`);
+    }
+
+    if (inputs.submitActions.includes("ticket")) {
+      steps.push(`\n### ${inputs.ticketSystem || "Ticketing"} Integration`);
+      steps.push("1. Go to Settings → Integrations → Ticketing");
+      steps.push("2. Connect your ticketing system account");
+      steps.push("3. Map form fields to ticket fields");
+      steps.push("4. Set default ticket type/priority/assignment");
+    }
   }
 
   if (inputs.needsDataLookup === "yes") {
-    steps.push("\n**Data Lookup:**");
-    steps.push("- Go to Settings → API Actions");
-    steps.push("- Configure lookup endpoint");
-    steps.push("- Map trigger field and response fields");
+    steps.push("\n## Step 4: Configure Data Lookup");
+    steps.push("1. Go to Settings → API Actions");
+    steps.push("2. Create a new 'Lookup' action");
+    steps.push("3. Configure the API endpoint and authentication");
+    steps.push("4. Map the trigger field and response fields");
+    steps.push(`5. Details: ${inputs.lookupDetails || "Configure based on your API"}`);
   }
 
-  steps.push("\n### Step 3: Test");
-  steps.push("1. Use Preview mode to test all paths");
-  steps.push("2. Submit test entries");
-  steps.push("3. Verify integrations fire correctly");
-  steps.push("4. Check email/Slack notifications arrive");
+  steps.push("\n## Testing Checklist");
+  steps.push("- [ ] Preview form and complete all paths");
+  steps.push("- [ ] Test with required fields empty (validation should block)");
+  steps.push("- [ ] Test conditional visibility rules");
+  steps.push("- [ ] Submit test entry and verify integrations fire");
+  if (inputs.submitActions?.includes("notification")) {
+    steps.push("- [ ] Verify email notification received");
+  }
+  if (inputs.submitActions?.includes("crm")) {
+    steps.push("- [ ] Verify CRM record created/updated");
+  }
+  steps.push("- [ ] Test on mobile device");
 
-  steps.push("\n### Step 4: Deploy");
-  steps.push("1. Set form to 'Published'");
-  steps.push("2. Configure access permissions");
+  steps.push("\n## Go Live");
+  steps.push("1. Set form status to 'Published'");
+  steps.push("2. Configure access permissions (public/authenticated/SSO)");
   steps.push("3. Get shareable link or embed code");
+  steps.push("4. Add to your website/portal/email");
 
   return steps.join("\n");
 }
@@ -688,70 +874,69 @@ function generateSetupGuide(inputs: Record<string, any>, cvuf: any): string {
 function generatePitchPoints(inputs: Record<string, any>): string {
   const points: string[] = [];
   
-  points.push("## Why This Microapp Matters\n");
+  points.push("# Internal Pitch Points\n");
+  points.push("Use these talking points when presenting this microapp to stakeholders.\n");
+  
+  points.push("## The Problem");
+  if (inputs.currentProcess === "Manual") {
+    points.push(`Currently, ${inputs.owningDepartment} handles ${inputs.microappName?.toLowerCase() || "this process"} through manual processes like email, phone calls, or paper forms. This is time-consuming, error-prone, and difficult to track.`);
+  } else if (inputs.currentProcess === "Spreadsheets") {
+    points.push(`Currently, ${inputs.owningDepartment} manages ${inputs.microappName?.toLowerCase() || "this process"} through spreadsheets and documents. This creates version control issues, lacks validation, and makes reporting difficult.`);
+  } else if (inputs.currentProcess === "Bad Software") {
+    points.push(`The current software solution for ${inputs.microappName?.toLowerCase() || "this process"} isn't meeting our needs. Users find it frustrating, and it doesn't integrate well with our other systems.`);
+  } else {
+    points.push(`There's no consistent process for ${inputs.microappName?.toLowerCase() || "this"} today. Different team members handle it differently, leading to inconsistent results and no visibility.`);
+  }
+
+  points.push("\n## The Solution");
+  points.push(`This microapp provides a streamlined, mobile-friendly digital experience for ${inputs.userType?.toLowerCase() || "users"} to ${inputs.microappDescription?.substring(0, 150) || inputs.triggerEvent || "complete their request"}.`);
+
+  points.push("\n## Key Benefits");
   
   // Time savings
-  if (inputs.currentProcess === "Manual") {
-    points.push("⏱️ **Eliminates manual process** - No more emails, phone calls, or paper forms");
-  } else if (inputs.currentProcess === "Spreadsheets") {
-    points.push("⏱️ **Replaces spreadsheet chaos** - Structured data capture with validation");
-  } else if (inputs.currentProcess === "Bad Software") {
-    points.push("⏱️ **Better user experience** - Modern, mobile-friendly interface");
-  }
-
-  // Volume impact
-  if (inputs.estimatedVolume === "10000+") {
-    points.push("📈 **High-volume ready** - Handles 10,000+ submissions/month efficiently");
-  } else if (inputs.estimatedVolume === "2000-10000") {
-    points.push("📈 **Scales with demand** - Built for thousands of monthly submissions");
-  }
-
+  points.push("⏱️ **Faster Processing** - Structured data capture eliminates back-and-forth clarification");
+  
   // Integration value
   if (inputs.submitActions?.length > 1) {
-    points.push("🔗 **Connected ecosystem** - Automatically syncs to " + inputs.submitActions.join(", "));
+    const integrations = inputs.submitActions.filter((a: string) => a !== "store_only");
+    if (integrations.length > 0) {
+      points.push(`🔗 **Connected Workflow** - Automatically triggers ${integrations.join(", ").replace("notification", "email alerts").replace("crm", "CRM updates").replace("ticket", "ticket creation").replace("slack", "Slack notifications")}`);
+    }
   }
-
+  
+  // Volume capacity
+  if (inputs.estimatedVolume === "10000+" || inputs.estimatedVolume === "2000-10000") {
+    points.push("📈 **Scale Ready** - Handles high volume without additional headcount");
+  }
+  
   // Compliance
-  if (inputs.complianceRequirements?.length > 0) {
-    points.push(`✅ **Compliance-ready** - Built with ${inputs.complianceRequirements.join(", ")} requirements in mind`);
+  if (inputs.complianceRequirements?.length > 0 && !inputs.complianceRequirements.includes("None")) {
+    points.push(`✅ **Compliance Built-In** - Designed with ${inputs.complianceRequirements.filter((c: string) => c !== "None").join(", ")} requirements in mind`);
   }
-
+  
   // User experience
   if (inputs.canSaveProgress === "yes") {
-    points.push("💾 **User-friendly** - Save and return later capability");
+    points.push("💾 **User-Friendly** - Users can save progress and return later");
   }
+  
+  // Mobile
+  points.push("📱 **Mobile-Ready** - Works seamlessly on any device");
 
   if (inputs.needsMultiLanguage === "yes") {
-    points.push(`🌐 **Global reach** - Supports ${inputs.languages?.length || "multiple"} languages`);
+    points.push(`🌐 **Global Reach** - Available in ${inputs.languages?.length || "multiple"} languages`);
   }
 
-  points.push("\n## Talk Track");
-  points.push(`"This microapp transforms how ${inputs.owningDepartment} handles ${inputs.microappName.toLowerCase()}. `);
-  points.push(`Instead of ${inputs.currentProcess === "Manual" ? "manual processes" : "the current system"}, `);
-  points.push(`users get a streamlined experience that ${inputs.submitActions?.includes("notification") ? "automatically notifies stakeholders" : "captures everything needed"} `);
-  points.push(`and ${inputs.submitActions?.includes("crm") ? "syncs directly to your CRM" : "stores data securely"}."`);
+  points.push("\n## ROI Projection");
+  points.push("Consider calculating:");
+  points.push("- Hours saved per submission × average hourly rate");
+  points.push("- Error reduction value (rework, corrections, customer complaints)");
+  points.push("- Faster resolution time impact on customer satisfaction");
+  if (inputs.estimatedVolume) {
+    points.push(`- At ${inputs.estimatedVolume} submissions/month, even small per-submission savings add up`);
+  }
+
+  points.push("\n## Sample Talk Track");
+  points.push(`"This ${inputs.microappName || "microapp"} transforms how ${inputs.owningDepartment || "we"} handle ${inputs.triggerEvent?.toLowerCase() || "this process"}. Instead of ${inputs.currentProcess === "Manual" ? "manual back-and-forth" : inputs.currentProcess === "Spreadsheets" ? "spreadsheet chaos" : "our current clunky process"}, ${inputs.userType?.toLowerCase() || "users"} get a simple, guided experience that captures everything we need the first time${inputs.submitActions?.includes("notification") ? " and automatically notifies the right people" : ""}${inputs.submitActions?.includes("crm") ? " while keeping our CRM in sync" : ""}."`);
 
   return points.join("\n");
-}
-
-function estimateBuildTime(inputs: Record<string, any>): string {
-  let hours = 2; // Base time
-  
-  // Add complexity factors
-  if (inputs.hasBranching === "yes") hours += 2;
-  if (inputs.needsApproval === "yes") hours += 1;
-  if (inputs.submitActions?.length > 2) hours += 2;
-  if (inputs.needsDataLookup === "yes") hours += 2;
-  if (inputs.needsMultiLanguage === "yes") hours += inputs.languages?.length || 2;
-  if (inputs.complianceRequirements?.length > 0) hours += 1;
-
-  if (hours <= 3) {
-    return "2-3 hours (Simple)";
-  } else if (hours <= 6) {
-    return "4-6 hours (Moderate)";
-  } else if (hours <= 10) {
-    return "1-2 days (Complex)";
-  } else {
-    return "2-3 days (Enterprise)";
-  }
 }
