@@ -4,11 +4,15 @@
 
 import Anthropic from "@anthropic-ai/sdk";
 import { NextRequest, NextResponse } from "next/server";
+import { Resend } from "resend";
 
 // Initialize Anthropic client
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
+
+// Initialize Resend client for email delivery
+const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
 
 // ============================================================================
 // FIELD MAPPING - CVUF integrationIDs to Internal API fields
@@ -467,6 +471,90 @@ async function sendSlackNotification(data: {
 }
 
 // ============================================================================
+// EMAIL DELIVERY VIA RESEND
+// ============================================================================
+
+async function sendEmailWithCVUF(data: {
+  userEmail: string;
+  userName: string;
+  microappName: string;
+  cvufJson: string;
+  dependencies: string;
+  setupGuide: string;
+  pitchPoints: string;
+  requestId: string;
+}) {
+  if (!resend) {
+    console.log("Resend not configured - skipping email delivery");
+    return;
+  }
+
+  try {
+    await resend.emails.send({
+      from: "Microapp Builder <onboarding@resend.dev>",
+      to: data.userEmail,
+      subject: `Your Microapp is Ready: ${data.microappName}`,
+      html: `
+        <div style="font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+          <div style="text-align: center; margin-bottom: 30px;">
+            <img src="https://www.callvu.com/wp-content/uploads/2024/01/callvu-logo.svg" alt="CallVu" style="height: 40px;">
+          </div>
+          
+          <h1 style="color: #0F172A; font-size: 24px; margin-bottom: 8px;">🎉 Your Microapp is Ready!</h1>
+          <p style="color: #64748B; font-size: 16px; margin-bottom: 24px;">Hi ${data.userName}, your <strong>${data.microappName}</strong> microapp has been generated.</p>
+          
+          <div style="background: #F1F5F9; border-radius: 12px; padding: 20px; margin-bottom: 24px;">
+            <p style="color: #0F172A; font-weight: 600; margin: 0 0 12px 0;">What's included:</p>
+            <p style="color: #334155; margin: 6px 0;">✅ Ready-to-import CVUF file</p>
+            <p style="color: #334155; margin: 6px 0;">✅ Step-by-step setup guide</p>
+            <p style="color: #334155; margin: 6px 0;">✅ Dependencies checklist</p>
+            <p style="color: #334155; margin: 6px 0;">✅ Internal pitch talking points</p>
+          </div>
+
+          <h2 style="color: #0F172A; font-size: 18px; margin-bottom: 12px;">📋 Quick Start</h2>
+          <ol style="color: #334155; padding-left: 20px;">
+            <li style="margin-bottom: 8px;">Open the attached CVUF file</li>
+            <li style="margin-bottom: 8px;">Copy the JSON content</li>
+            <li style="margin-bottom: 8px;">In CallVu Studio: Create New Form → Import from JSON</li>
+            <li style="margin-bottom: 8px;">Paste and import!</li>
+          </ol>
+
+          <div style="background: #ECFDF5; border: 1px solid #10B981; border-radius: 8px; padding: 16px; margin: 24px 0;">
+            <p style="color: #065F46; font-size: 14px; margin: 0;"><strong>Pro tip:</strong> Review the setup guide below for integration configuration details.</p>
+          </div>
+
+          <hr style="border: none; border-top: 1px solid #E2E8F0; margin: 30px 0;">
+
+          <h2 style="color: #0F172A; font-size: 18px; margin-bottom: 12px;">📖 Setup Guide</h2>
+          <pre style="background: #F8FAFC; border-radius: 8px; padding: 16px; font-size: 12px; overflow-x: auto; white-space: pre-wrap;">${data.setupGuide}</pre>
+
+          <h2 style="color: #0F172A; font-size: 18px; margin: 24px 0 12px 0;">📦 Dependencies</h2>
+          <pre style="background: #F8FAFC; border-radius: 8px; padding: 16px; font-size: 12px; overflow-x: auto; white-space: pre-wrap;">${data.dependencies}</pre>
+
+          <h2 style="color: #0F172A; font-size: 18px; margin: 24px 0 12px 0;">💬 Pitch Points</h2>
+          <pre style="background: #F8FAFC; border-radius: 8px; padding: 16px; font-size: 12px; overflow-x: auto; white-space: pre-wrap;">${data.pitchPoints}</pre>
+
+          <hr style="border: none; border-top: 1px solid #E2E8F0; margin: 30px 0;">
+
+          <h2 style="color: #0F172A; font-size: 18px; margin-bottom: 12px;">📁 Your CVUF File</h2>
+          <p style="color: #64748B; font-size: 14px;">Copy the JSON below and import into CallVu Studio:</p>
+          <div style="background: #1E293B; border-radius: 8px; padding: 16px; margin-top: 12px;">
+            <pre style="color: #E2E8F0; font-size: 11px; overflow-x: auto; white-space: pre-wrap; word-break: break-all; margin: 0;">${data.cvufJson}</pre>
+          </div>
+
+          <hr style="border: none; border-top: 1px solid #E2E8F0; margin: 30px 0;">
+          
+          <p style="color: #94A3B8; font-size: 12px; text-align: center;">Request ID: ${data.requestId}<br>Generated by CallVu Microapp Builder</p>
+        </div>
+      `,
+    });
+    console.log(`Email sent successfully to ${data.userEmail}`);
+  } catch (error) {
+    console.error("Failed to send email:", error);
+  }
+}
+
+// ============================================================================
 // GOOGLE SHEETS LOGGING
 // ============================================================================
 
@@ -616,6 +704,18 @@ CRITICAL INSTRUCTIONS:
       generationTimeMs,
       requestId,
       warnings
+    });
+
+    // Send email with CVUF to user
+    await sendEmailWithCVUF({
+      userEmail: inputs.userEmail,
+      userName: inputs.userName,
+      microappName: inputs.microappName,
+      cvufJson,
+      dependencies,
+      setupGuide,
+      pitchPoints,
+      requestId
     });
 
     // Return success response with all outputs
