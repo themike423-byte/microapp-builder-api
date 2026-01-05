@@ -20,15 +20,6 @@ const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KE
 // The CVUF form uses specific integrationID names. This function normalizes
 // them to the internal field names used by the rest of the API.
 
-// Helper to convert comma-separated strings to arrays
-function normalizeToArray(value: any): string[] {
-  if (Array.isArray(value)) return value;
-  if (typeof value === "string" && value.trim()) {
-    return value.split(",").map((s: string) => s.trim()).filter(Boolean);
-  }
-  return [];
-}
-
 function normalizeInputs(body: Record<string, any>): Record<string, any> {
   return {
     // Core info - direct mappings
@@ -58,7 +49,7 @@ function normalizeInputs(body: Record<string, any>): Record<string, any> {
     canSaveProgress: body.saveAndReturn,  // CVUF: saveAndReturn
     
     // Post-submit actions
-    submitActions: normalizeToArray(body.submitActions),
+    submitActions: body.submitActions,
     emailRecipients: body.notificationRecipients,  // CVUF: notificationRecipients
     slackChannel: body.slackChannel,
     crmSystem: body.crmType,  // CVUF: crmType
